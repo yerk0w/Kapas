@@ -10,6 +10,7 @@ import {
   Sparkles,
   Loader2
 } from 'lucide-react';
+import { apiFetch, getApiBase } from '../api';
 
 export default function ReviewsModal({ product, onClose }) {
   const [activeTab, setActiveTab] = useState('month'); // 'month' | 'all'
@@ -22,8 +23,7 @@ export default function ReviewsModal({ product, onClose }) {
     const fetchReviews = async () => {
       setIsLoading(true);
       try {
-        const res = await fetch(`/api/products/${product.id}/reviews`);
-        const data = await res.json();
+        const data = await apiFetch(`/api/products/${product.id}/reviews`);
         setReviewsData(data);
       } catch (e) {
         console.error('Error fetching reviews:', e);
@@ -50,7 +50,8 @@ export default function ReviewsModal({ product, onClose }) {
 
   const handleExportCsv = () => {
     const isMonthParam = activeTab === 'month' ? '?is_last_month=true' : '';
-    window.location.href = `/api/products/${product.id}/reviews/export${isMonthParam}`;
+    const base = getApiBase();
+    window.location.href = `${base}/api/products/${product.id}/reviews/export${isMonthParam}`;
   };
 
   return (

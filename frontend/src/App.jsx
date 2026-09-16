@@ -6,6 +6,8 @@ import Filters from './components/Filters';
 import ProductTable from './components/ProductTable';
 import Toast from './components/Toast';
 import ReviewsModal from './components/ReviewsModal';
+import BackendConfigModal from './components/BackendConfigModal';
+import { apiFetch, getApiBase } from './api';
 
 export default function App() {
   const [products, setProducts] = useState([]);
@@ -19,6 +21,8 @@ export default function App() {
   const [isRefreshingAll, setIsRefreshingAll] = useState(false);
   const [toast, setToast] = useState(null);
   const [selectedProductForReviews, setSelectedProductForReviews] = useState(null);
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+  const [isBackendConnected, setIsBackendConnected] = useState(true);
 
   const [sortBy, setSortBy] = useState('reviews_month');
   const [sortOrder, setSortOrder] = useState('desc');
@@ -42,36 +46,39 @@ export default function App() {
     setToast({ message, type });
     setTimeout(() => {
       setToast(null);
-    }, 3500);
+    }, 4000);
   };
 
   const fetchStats = async () => {
     try {
-      const res = await fetch('/api/stats');
-      const data = await res.json();
+      const data = await apiFetch('/api/stats');
       setStats(data);
+      setIsBackendConnected(true);
     } catch (e) {
       console.error('Stats error:', e);
+      setIsBackendConnected(false);
     }
   };
 
   const fetchCategories = async () => {
     try {
-      const res = await fetch('/api/categories');
-      const data = await res.json();
+      const data = await apiFetch('/api/categories');
       setCategories(data.categories || []);
+      setIsBackendConnected(true);
     } catch (e) {
       console.error('Categories error:', e);
+      setIsBackendConnected(false);
     }
   };
 
   const fetchTurboStatus = async () => {
     try {
-      const res = await fetch('/api/turbo/status');
-      const data = await res.json();
+      const data = await apiFetch('/api/turbo/status');
       setTurboStatus(data);
+      setIsBackendConnected(true);
     } catch (e) {
       console.error('Turbo status error:', e);
+      setIsBackendConnected(false);
     }
   };
 
@@ -94,13 +101,14 @@ export default function App() {
     if (filters.is_exclusive) params.append('is_exclusive', 'true');
 
     try {
-      const res = await fetch(`/api/products?${params.toString()}`);
-      const data = await res.json();
+      const data = await apiFetch(`/api/products?${params.toString()}`);
       setProducts(data.items || []);
       setTotalCount(data.total || 0);
+      setIsBackendConnected(true);
     } catch (e) {
       console.error('Products error:', e);
-      showToast('Ошибка загрузки списка товаров', 'error');
+      setIsBackendConnected(false);
+      showToast('Ошибка загрузки товаров: ' + e.message, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -121,57 +129,36 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [fetchProducts]);
 
-  // Polling for 8-category turbo status
+  // Turbo polling when active
   useEffect(() => {
-    const checkTurbo = async () => {
-      try {
-        const res = await fetch('/api/turbo/status');
-        const data = await res.json();
-        setTurboStatus(data);
-        if (data.is_any_running) {
-          fetchStats();
-          fetchCategories();
-          fetchProducts();
-        }
-      } catch (e) {
-        console.error('Turbo check error:', e);
-      }
-    };
-
-    turboTimerRef.current = setInterval(checkTurbo, 1200);
-    return () => {
-      if (turboTimerRef.current) clearInterval(turboTimerRef.current);
-    };
-  }, [fetchProducts]);
-
-  // Polling single query scanner status
-  useEffect(() => {
-    const checkStatus = async () => {
-      try {
-        const res = await fetch('/api/scan/status');
-        const status = await res.json();
-        setScanStatus(status);
-
-        if (status.is_running) {
-          if (!pollTimerRef.current) {
-            pollTimerRef.current = setInterval(checkStatus, 1200);
-          }
-        } else {
-          if (pollTimerRef.current) {
-            clearInterval(pollTimerRef.current);
-            pollTimerRef.current = null;
+    const hasActiveLane = turboStatus?.lanes?.some((l) => l.is_active);
+    if (hasActiveLane) {
+      if (!turboTimerRef.current) {
+        turboTimerRef.current = setInterval(async () => {
+          try {
+            const data = await apiFetch('/api/turbo/status');
+            setTurboStatus(data);
             fetchStats();
             fetchCategories();
             fetchProducts();
+          } catch (err) {
+            console.error(err);
           }
-        }
-      } catch (e) {
-        console.error('Scan status error:', e);
+        }, 1500);
       }
+    } else {
+      if (turboTimerRef.current) {
+        clearInterval(turboTimerRef.current);
+        turboTimerRef.current = null;
+      }
+    }
+    return () => {
+      if (turboTimerRef.current) clearInterval(turboTimerRef.current);
     };
+  }, [turboStatus?.lanes, fetchProducts]);
 
-    checkStatus();
-
+  // Cleanup timers on unmount
+  useEffect(() => {
     return () => {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     };
@@ -180,81 +167,80 @@ export default function App() {
   // Turbo Actions
   const handleStartAllTurbo = async () => {
     try {
-      const res = await fetch('/api/turbo/start-all', { method: 'POST' });
-      const data = await res.json();
+      const data = await apiFetch('/api/turbo/start-all', { method: 'POST' });
       if (data.ok) {
         showToast('Все 8 категорий запущены в Турбо-режим!', 'success');
         fetchTurboStatus();
       }
     } catch (e) {
-      showToast(`Ошибка запуска: ${e}`, 'error');
+      showToast('Ошибка запуска: ' + e.message, 'error');
     }
   };
 
   const handleStopAllTurbo = async () => {
     try {
-      await fetch('/api/turbo/stop-all', { method: 'POST' });
+      await apiFetch('/api/turbo/stop-all', { method: 'POST' });
       showToast('Все 8 потоков остановлены', 'info');
       fetchTurboStatus();
       fetchStats();
       fetchCategories();
       fetchProducts();
     } catch (e) {
-      showToast(`Ошибка остановки: ${e}`, 'error');
+      showToast('Ошибка остановки: ' + e.message, 'error');
     }
   };
 
   const handleStartLane = async (laneId) => {
     try {
-      const res = await fetch(`/api/turbo/start/${laneId}`, { method: 'POST' });
-      const data = await res.json();
+      const data = await apiFetch(`/api/turbo/start/${laneId}`, { method: 'POST' });
       if (data.ok) {
         showToast(`Поток '${laneId}' запущен!`, 'success');
         fetchTurboStatus();
       }
     } catch (e) {
-      showToast(`Ошибка запуска: ${e}`, 'error');
+      showToast('Ошибка запуска: ' + e.message, 'error');
     }
   };
 
   const handleStopLane = async (laneId) => {
     try {
-      await fetch(`/api/turbo/stop/${laneId}`, { method: 'POST' });
+      await apiFetch(`/api/turbo/stop/${laneId}`, { method: 'POST' });
       showToast(`Поток '${laneId}' остановлен`, 'info');
       fetchTurboStatus();
       fetchStats();
       fetchProducts();
     } catch (e) {
-      showToast(`Ошибка остановки: ${e}`, 'error');
+      showToast('Ошибка остановки: ' + e.message, 'error');
     }
   };
 
   // Custom Search Scanner
   const handleStartScan = async (query, pages, mode = 'query') => {
     try {
-      const res = await fetch('/api/scan', {
+      const data = await apiFetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query, pages, mode }),
       });
-      const data = await res.json();
       if (data.ok) {
         showToast('Парсинг запущен в фоновом режиме', 'success');
-        const sRes = await fetch('/api/scan/status');
-        const status = await sRes.json();
+        const status = await apiFetch('/api/scan/status');
         setScanStatus(status);
         if (!pollTimerRef.current) {
           pollTimerRef.current = setInterval(async () => {
-            const r = await fetch('/api/scan/status');
-            const s = await r.json();
-            setScanStatus(s);
-            if (!s.is_running) {
-              clearInterval(pollTimerRef.current);
-              pollTimerRef.current = null;
-              fetchStats();
-              fetchCategories();
-              fetchProducts();
-              showToast('Сбор данных завершен!', 'success');
+            try {
+              const s = await apiFetch('/api/scan/status');
+              setScanStatus(s);
+              if (!s.is_running) {
+                clearInterval(pollTimerRef.current);
+                pollTimerRef.current = null;
+                fetchStats();
+                fetchCategories();
+                fetchProducts();
+                showToast('Сбор данных завершен!', 'success');
+              }
+            } catch (pollErr) {
+              console.error(pollErr);
             }
           }, 1200);
         }
@@ -262,24 +248,23 @@ export default function App() {
         showToast(data.message || 'Ошибка запуска', 'error');
       }
     } catch (e) {
-      showToast(`Ошибка сети: ${e}`, 'error');
+      showToast('Ошибка сети: ' + e.message, 'error');
     }
   };
 
   const handleCancelScan = async () => {
     try {
-      await fetch('/api/scan/cancel', { method: 'POST' });
+      await apiFetch('/api/scan/cancel', { method: 'POST' });
       showToast('Запрос на отмену отправлен', 'info');
     } catch (e) {
-      showToast(`Ошибка отмены: ${e}`, 'error');
+      showToast('Ошибка отмены: ' + e.message, 'error');
     }
   };
 
   const handleRefreshProduct = async (productId) => {
     setRefreshingIds((prev) => [...prev, productId]);
     try {
-      const res = await fetch(`/api/refresh/${productId}`, { method: 'POST' });
-      const data = await res.json();
+      const data = await apiFetch(`/api/refresh/${productId}`, { method: 'POST' });
       if (data.ok) {
         showToast(`Товар ${productId} успешно обновлен`, 'success');
         fetchStats();
@@ -288,7 +273,7 @@ export default function App() {
         showToast(data.message || 'Сбой обновления', 'error');
       }
     } catch (e) {
-      showToast(`Ошибка сети: ${e}`, 'error');
+      showToast('Ошибка сети: ' + e.message, 'error');
     } finally {
       setRefreshingIds((prev) => prev.filter((id) => id !== productId));
     }
@@ -298,15 +283,14 @@ export default function App() {
     if (!window.confirm('Обновить данные по всем товарам в базе?')) return;
     setIsRefreshingAll(true);
     try {
-      const res = await fetch('/api/refresh-all', { method: 'POST' });
-      const data = await res.json();
+      const data = await apiFetch('/api/refresh-all', { method: 'POST' });
       if (data.ok) {
         showToast('Обновление всей базы запущено', 'success');
       } else {
         showToast(data.message || 'Не удалось запустить', 'error');
       }
     } catch (e) {
-      showToast(`Ошибка сети: ${e}`, 'error');
+      showToast('Ошибка сети: ' + e.message, 'error');
     } finally {
       setIsRefreshingAll(false);
     }
@@ -315,13 +299,13 @@ export default function App() {
   const handleClearDb = async () => {
     if (!window.confirm('Вы уверены, что хотите удалить все сохраненные товары?')) return;
     try {
-      await fetch('/api/clear', { method: 'POST' });
+      await apiFetch('/api/clear', { method: 'POST' });
       showToast('База данных очищена', 'info');
       fetchStats();
       fetchCategories();
       fetchProducts();
     } catch (e) {
-      showToast(`Ошибка: ${e}`, 'error');
+      showToast('Ошибка: ' + e.message, 'error');
     }
   };
 
@@ -334,7 +318,8 @@ export default function App() {
     if (filters.category) params.append('category', filters.category);
     if (filters.is_exclusive) params.append('is_exclusive', 'true');
 
-    window.location.href = `/api/export/csv?${params.toString()}`;
+    const base = getApiBase();
+    window.open(`${base}/api/export/csv?${params.toString()}`, '_blank');
   };
 
   const handleFilterChange = (field, value) => {
@@ -374,6 +359,14 @@ export default function App() {
     }
   };
 
+  const handleConfigSaved = () => {
+    fetchStats();
+    fetchCategories();
+    fetchTurboStatus();
+    fetchProducts();
+    showToast('Настройки бэкенда обновлены', 'success');
+  };
+
   return (
     <div className="min-h-screen bg-slate-50/60 pb-16">
       <Navbar
@@ -382,7 +375,21 @@ export default function App() {
         onExportCsv={handleExportCsv}
         onClearDb={handleClearDb}
         isRefreshingAll={isRefreshingAll}
+        onOpenConfig={() => setIsConfigModalOpen(true)}
+        isBackendConnected={isBackendConnected}
       />
+
+      {!isBackendConnected && (
+        <div className="bg-rose-50 border-b border-rose-200 px-4 py-2.5 text-center text-xs text-rose-800 flex items-center justify-center gap-2">
+          <span>⚠️ Бэкенд Kapas не отвечает. Если сайт открыт на Vercel, укажите ссылку на ваш запущенный сервер:</span>
+          <button
+            onClick={() => setIsConfigModalOpen(true)}
+            className="font-bold underline text-rose-900 hover:text-rose-950 ml-1 cursor-pointer"
+          >
+            Настроить подключение API
+          </button>
+        </div>
+      )}
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
         {/* 1. TURBO 8-CATEGORY COORDINATOR */}
@@ -434,6 +441,14 @@ export default function App() {
           onClose={() => setSelectedProductForReviews(null)}
         />
       )}
+
+      {/* BACKEND CONFIG MODAL */}
+      <BackendConfigModal
+        isOpen={isConfigModalOpen}
+        onClose={() => setIsConfigModalOpen(false)}
+        onSave={handleConfigSaved}
+        isConnected={isBackendConnected}
+      />
 
       <Toast toast={toast} onClose={() => setToast(null)} />
     </div>

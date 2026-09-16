@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import FastAPI, BackgroundTasks, Query, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.database import (
@@ -19,6 +20,14 @@ from backend.coordinator import coordinator
 init_db()
 
 app = FastAPI(title="Kapas Analytics", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIST = os.path.join(BASE_DIR, "frontend", "dist")
